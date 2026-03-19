@@ -5,12 +5,13 @@ Codecks 连接器 — AstrBot 插件
 
 import os
 from typing import Optional
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star
 from astrbot.api import AstrBotConfig, logger
 
 from .codecks_client import CodecksClient, CodecksError
 from .nlu_handler import NLUHandler
+from .scheduler import Scheduler
 from . import formatters
 
 
@@ -26,6 +27,15 @@ class CodecksConnectorPlugin(Star):
         self._nlu_skill: str = ""
         self._default_decks: str = self.config.get("default_decks", "")
         self._load_nlu_skill()
+        # 初始化定时任务调度器（延迟启动，避免 event loop 未就绪）
+        self._scheduler: Optional[Scheduler] = None
+        self._scheduler_started = False
+        if self.config.get("enable_scheduler", True):
+            data_dir = os.path.dirname(__file__)
+            self._scheduler = Scheduler(
+                data_dir=data_dir,
+                execute_callback=self._execute_scheduled_query
+            )
 
     def _load_nlu_skill(self):
         """加载 NLU Skill 文档"""
@@ -90,7 +100,16 @@ class CodecksConnectorPlugin(Star):
             return True, "", uid
         return True, "", None
 
+    def _ensure_scheduler_started(self):
+        """确保调度器后台任务已启动（懒启动）"""
+        if self._scheduler and not self._scheduler_started:
+            self._scheduler.start()
+            self._scheduler_started = True
+
     async def terminate(self):
+        if self._scheduler:
+            await self._scheduler.stop()
+            logger.info("[Codecks] 定时任务调度器已停止")
         if self.client:
             await self.client.close()
             logger.info("[Codecks] 客户端已关闭")
@@ -553,3 +572,210 @@ class CodecksConnectorPlugin(Star):
             yield event.plain_result(formatters.format_stats(stats))
         except CodecksError as e:
             yield event.plain_result(f"❌ 获取统计失败: {e}")
+
+    # ==================== 定时任务 ====================
+
+    async def _execute_scheduled_query(self, ai_prompt: str):
+        """定时任务回调：执行 AI 查询并发送结果到配置中的目标群"""
+        self._ensure_scheduler_started()
+        targets = self.config.get("schedule_targets", [])
+        if not targets:
+            logger.warning("[Codecks Scheduler] 未配置推送目标群 (schedule_targets)，跳过执行")
+            return
+
+        # 确保客户端就绪
+        ok, err, _ = await self._pre_check()
+        if not ok:
+            logger.error(f"[Codecks Scheduler] 前置检查失败: {err}")
+            return
+
+        # 确保 NLU Handler 就绪
+        provider = self.context.get_using_provider()
+        if not provider:
+            logger.error("[Codecks Scheduler] 未配置 LLM Provider，无法执行定时查询")
+            return
+
+        if self._nlu_handler is None:
+            self._nlu_handler = NLUHandler(
+                self.client,
+                llm_provider=provider,
+                default_deck_names=self._default_decks
+            )
+        else:
+            self._nlu_handler.llm_provider = provider
+
+        if not self._nlu_skill:
+            logger.error("[Codecks Scheduler] NLU Skill 文档未加载")
+            return
+
+        try:
+            # 调用 LLM 解析意图
+            resp = await provider.text_chat(
+                prompt=ai_prompt,
+                system_prompt=self._nlu_skill
+            )
+            if not resp or not resp.completion_text:
+                logger.error("[Codecks Scheduler] LLM 未返回有效响应")
+                return
+
+            intent = self._nlu_handler.parse_intent(resp.completion_text)
+            if not intent:
+                logger.error(f"[Codecks Scheduler] 无法解析意图: {resp.completion_text[:200]}")
+                return
+
+            # 获取用户 ID
+            user_id = None
+            uid, _ = await self._get_user_id()
+            if uid:
+                user_id = uid
+
+            # 执行意图获取结果
+            result = await self._nlu_handler.execute(intent, user_id)
+
+            # 添加定时任务标识
+            from datetime import datetime
+            time_str = datetime.now().strftime("%H:%M")
+            message = f"⏰ 定时报告 ({time_str})\n🔍 {ai_prompt}\n\n{result}"
+
+            # 发送到所有目标群
+            for target in targets:
+                target = target.strip()
+                if not target:
+                    continue
+
+                # 纯数字群号：自动查找可用平台 ID
+                if ":" not in target:
+                    if target.isdigit():
+                        # 尝试从已注册的平台中获取第一个平台 ID
+                        auto_platform = None
+                        try:
+                            platforms = self.context.get_registered_platforms()
+                            if platforms:
+                                auto_platform = platforms[0].meta.name if hasattr(platforms[0], 'meta') else None
+                        except Exception:
+                            pass
+                        if not auto_platform:
+                            logger.warning(f"[Codecks Scheduler] 纯数字群号 {target}，但无法确定平台名。请使用 平台名:群号 格式")
+                            continue
+                        target = f"{auto_platform}:{target}"
+                    else:
+                        logger.warning(f"[Codecks Scheduler] 无效的目标群格式: {target}")
+                        continue
+
+                parts = target.split(":", 1)
+                platform_id = parts[0]
+                group_id = parts[1]
+                umo = f"{platform_id}:GroupMessage:{group_id}"
+
+                try:
+                    await self.context.send_message(umo, MessageChain().message(message))
+                    logger.info(f"[Codecks Scheduler] 已发送到 {umo}")
+                except Exception as e:
+                    logger.error(f"[Codecks Scheduler] 发送到 {umo} 失败: {e}")
+
+        except Exception as e:
+            logger.error(f"[Codecks Scheduler] 执行查询异常: {e}", exc_info=True)
+
+    @codecks.command("schedule", alias={"定时"})
+    async def cmd_schedule(self, event: AstrMessageEvent, text: str = ""):
+        """定时任务管理。用法: /ck schedule <add|list|remove|test> [参数]"""
+        self._ensure_scheduler_started()
+        if not self._scheduler:
+            yield event.plain_result("❌ 定时任务功能未启用，请在配置中开启 enable_scheduler")
+            return
+
+        # 从原始消息中提取 schedule 之后的完整文本（绕过 AstrBot 参数拆分）
+        import re
+        raw_msg = event.message_str.strip()
+        m = re.search(r'(?:schedule|定时)\s*(.*)', raw_msg, re.IGNORECASE)
+        full_text = m.group(1).strip() if m else text.strip()
+
+        # 提取 action（第一个词）
+        parts = full_text.split(None, 1)
+        action = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        if action in ("list", "ls", "列表", ""):
+            yield event.plain_result(self._scheduler.list_tasks())
+            return
+
+        if action in ("add", "添加", "新增"):
+            if not rest:
+                yield event.plain_result(
+                    "📋 添加定时任务\n\n"
+                    "用法: /ck schedule add <时间> <查询>\n\n"
+                    "示例:\n"
+                    "  /ck schedule add 每天16:30 今天完成了哪些BUG\n"
+                    "  /ck schedule add 每天9点 看看最近的进度\n"
+                    "  /ck schedule add 每周一10:00 本周统计"
+                )
+                return
+
+            time_expr, ai_prompt = self._parse_schedule_args(rest)
+            if not time_expr or not ai_prompt:
+                yield event.plain_result(
+                    f"❌ 无法解析参数，请使用格式:\n"
+                    f"  /ck schedule add <时间> <查询>\n\n"
+                    f"例如: /ck schedule add 每天16:30 今天完成了哪些BUG"
+                )
+                return
+
+            ok, msg = self._scheduler.add_task(time_expr, ai_prompt)
+            targets = self.config.get("schedule_targets", [])
+            if ok and not targets:
+                msg += "\n\n⚠️ 注意：尚未配置推送目标群！请在 WebUI 配置 schedule_targets。"
+            yield event.plain_result(msg)
+            return
+
+        if action in ("remove", "rm", "del", "delete", "删除"):
+            task_id = rest.strip()
+            if not task_id:
+                yield event.plain_result("❌ 请指定任务编号，例如: /ck schedule remove 1")
+                return
+            ok, msg = self._scheduler.remove_task(task_id)
+            yield event.plain_result(msg)
+            return
+
+        if action in ("test", "测试", "run", "执行"):
+            task_id = rest.strip()
+            if not task_id:
+                yield event.plain_result("❌ 请指定任务编号，例如: /ck schedule test 1")
+                return
+            yield event.plain_result(f"⏳ 正在执行任务 #{task_id}...")
+            ok, msg = await self._scheduler.execute_now(task_id)
+            yield event.plain_result(msg)
+            return
+
+        yield event.plain_result(
+            "📋 定时任务管理\n\n"
+            "用法:\n"
+            "  /ck schedule add <时间> <查询>  — 添加定时任务\n"
+            "  /ck schedule list             — 查看所有任务\n"
+            "  /ck schedule remove <编号>     — 删除任务\n"
+            "  /ck schedule test <编号>       — 立即测试执行\n\n"
+            "时间格式示例: 每天16:30、每天8点、每周一10:00、每30分钟"
+        )
+
+    @staticmethod
+    def _parse_schedule_args(raw: str) -> tuple:
+        """
+        解析 schedule add 的参数，分割时间表达式和 AI 查询。
+        例如: '每天16:30 今天完成了哪些BUG' → ('每天16:30', '今天完成了哪些BUG')
+        """
+        import re
+        # 尝试匹配常见的中文时间模式
+        patterns = [
+            r'^(每天\s*\d{1,2}[:\uff1a点]\d{0,2}分?)\s+(.+)$',
+            r'^(每天\s*\d{1,2}点)\s+(.+)$',
+            r'^(每周[\u4e00-\u9fff]\s*\d{1,2}[:\uff1a点]\d{1,2}分?)\s+(.+)$',
+            r'^(每小时)\s+(.+)$',
+            r'^(每\d+小时)\s+(.+)$',
+            r'^(每\d+分钟)\s+(.+)$',
+            # cron 表达式 (5段)
+            r'^([\d\*\/\-\,]+(?:\s+[\d\*\/\-\,]+){4})\s+(.+)$',
+        ]
+        for pattern in patterns:
+            m = re.match(pattern, raw)
+            if m:
+                return m.group(1).strip(), m.group(2).strip()
+        return None, None

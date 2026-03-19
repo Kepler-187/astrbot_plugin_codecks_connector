@@ -34,5 +34,17 @@
     "type": "string",
     "default": "",
     "hint": "限定 AI 搜索/筛选只查这些 Deck。多个用逗号分隔，如 Stable Bugs,Feature Requests。留空则查所有 Deck。名称需精确匹配，可通过 /ck decks 查看。"
+  },
+  "enable_scheduler": {
+    "description": "启用定时任务功能",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后可用 /ck schedule 命令管理定时查询推送。关闭后所有定时任务暂停。"
+  },
+  "schedule_targets": {
+    "description": "定时任务推送目标群列表",
+    "type": "list",
+    "default": [],
+    "hint": "填写要接收定时推送的群。格式: 平台ID:群号，例如 aiocqhttp:123456789。多个群各填一行。可通过 /ck schedule test <编号> 测试。"
   }
 }
