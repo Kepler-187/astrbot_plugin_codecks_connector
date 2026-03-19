@@ -1,0 +1,20 @@
+{
+  "token": {
+    "description": "Codecks 认证 Token",
+    "type": "string",
+    "default": "",
+    "hint": "从浏览器开发者工具中提取 cookie 'at' 的值（发往 api.codecks.io 的请求）。Token 等同于用户身份，请妥善保管。"
+  },
+  "subdomain": {
+    "description": "组织子域名",
+    "type": "string",
+    "default": "",
+    "hint": "你的 Codecks 组织子域名。例如 team123.codecks.io 则填写 team123。"
+  },
+  "rate_limit_delay": {
+    "description": "请求间隔（秒）",
+    "type": "float",
+    "default": 0.15,
+    "hint": "两次 API 请求之间的最小间隔，防止触发速率限制（40次/5秒）。默认 0.15 秒。"
+  }
+}

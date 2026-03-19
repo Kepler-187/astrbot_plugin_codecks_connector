@@ -1,13 +1,7 @@
 name: astrbot_plugin_codecks_connector
-display_name: Codecks 连接器
+display_name: Codecks Connector
+description: 连接 Codecks 项目管理平台，通过聊天命令查询和管理项目、卡组、卡片、里程碑等
 author: Veewo
-description: 让 AstrBot 可以操作、查询、收集 Codecks 项目管理平台的信息
 version: 1.0.0
-repo: https://github.com/veewo/astrbot_plugin_codecks_connector
-support_platforms:
-  - aiocqhttp
-  - telegram
-  - discord
-  - lark
-  - kook
-astrbot_version: ">=4.16,<5"
+repo_url: https://github.com/AstrBotDevs/astrbot_plugin_codecks_connector
+astrbot_version: ">=4.5.7"
