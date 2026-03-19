@@ -16,5 +16,17 @@
     "type": "float",
     "default": 0.15,
     "hint": "两次 API 请求之间的最小间隔，防止触发速率限制（40次/5秒）。默认 0.15 秒。"
+  },
+  "enable_nlu": {
+    "description": "启用自然语言命令（#ck）",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后可用 #ck 加自然语言来操作 Codecks。需要已配置 LLM Provider。"
+  },
+  "nlu_skill_override": {
+    "description": "自定义 NLU Skill 内容",
+    "type": "string",
+    "default": "",
+    "hint": "覆盖默认的 NLU Skill 文档内容。留空则使用插件自带的 codecks_nlu_skill.md。"
   }
 }

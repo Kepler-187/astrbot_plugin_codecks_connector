@@ -3,12 +3,14 @@ Codecks 连接器 — AstrBot 插件
 通过聊天命令连接、查询和管理 Codecks 项目管理平台
 """
 
+import os
 from typing import Optional
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star
 from astrbot.api import AstrBotConfig, logger
 
 from .codecks_client import CodecksClient, CodecksError
+from .nlu_handler import NLUHandler
 from . import formatters
 
 
@@ -20,6 +22,25 @@ class CodecksConnectorPlugin(Star):
         self.config = config
         self.client: Optional[CodecksClient] = None
         self._auto_user_id: Optional[str] = None
+        self._nlu_handler: Optional[NLUHandler] = None
+        self._nlu_skill: str = ""
+        self._load_nlu_skill()
+
+    def _load_nlu_skill(self):
+        """加载 NLU Skill 文档"""
+        # 优先使用配置中的自定义 Skill
+        override = self.config.get("nlu_skill_override", "")
+        if override:
+            self._nlu_skill = override
+            return
+        # 加载默认 Skill 文件
+        skill_path = os.path.join(os.path.dirname(__file__), "codecks_nlu_skill.md")
+        if os.path.exists(skill_path):
+            with open(skill_path, "r", encoding="utf-8") as f:
+                self._nlu_skill = f.read()
+            logger.info("[Codecks] 已加载 NLU Skill 文档")
+        else:
+            logger.warning("[Codecks] NLU Skill 文档不存在")
 
     def _get_token(self) -> str:
         return self.config.get("token", "")
@@ -72,6 +93,99 @@ class CodecksConnectorPlugin(Star):
         if self.client:
             await self.client.close()
             logger.info("[Codecks] 客户端已关闭")
+
+    # ==================== #ck 自然语言入口 ====================
+
+    @filter.on_decorating_result()
+    async def on_all_messages(self, event: AstrMessageEvent):
+        """拦截 #ck 开头的消息，进入自然语言处理流程"""
+        msg = event.message_str.strip()
+        if not msg.startswith("#ck"):
+            return  # 不是 #ck 前缀，不处理
+
+        # 提取 #ck 后面的自然语言部分
+        text = msg[3:].strip()
+
+        if not self.config.get("enable_nlu", True):
+            yield event.plain_result("❌ 自然语言命令未启用")
+            event.stop_event()
+            return
+
+        if not text:
+            yield event.plain_result(
+                "🎴 Codecks 自然语言助手\n\n"
+                "用法: #ck <你的指令>\n\n"
+                "示例:\n"
+                "  #ck 看看最近的BUG\n"
+                "  #ck 创建一个高优先级BUG 战斗闪退\n"
+                "  #ck 搜一下存档相关的问题\n"
+                "  #ck 我手上还有什么任务\n"
+                "  #ck 统计一下进度"
+            )
+            event.stop_event()
+            return
+
+        # 前置检查
+        ok, err, _ = await self._pre_check()
+        if not ok:
+            yield event.plain_result(err)
+            event.stop_event()
+            return
+
+        # 确保 NLU Handler 已初始化
+        if self._nlu_handler is None:
+            self._nlu_handler = NLUHandler(self.client)
+
+        if not self._nlu_skill:
+            yield event.plain_result("❌ NLU Skill 文档未加载，无法解析自然语言")
+            event.stop_event()
+            return
+
+        # 调用 LLM 解析意图
+        provider = self.context.get_using_provider()
+        if not provider:
+            yield event.plain_result("❌ 未配置 LLM Provider，无法使用自然语言命令")
+            event.stop_event()
+            return
+
+        try:
+            resp = await provider.text_chat(
+                prompt=text,
+                system_prompt=self._nlu_skill
+            )
+            if not resp or not resp.completion_text:
+                yield event.plain_result("❌ LLM 未返回有效响应")
+                event.stop_event()
+                return
+
+            # 解析意图
+            intent = self._nlu_handler.parse_intent(resp.completion_text)
+            if not intent:
+                logger.warning(f"[Codecks NLU] 无法解析 LLM 输出: {resp.completion_text[:200]}")
+                yield event.plain_result(
+                    f"🤔 无法理解你的意图，请试试更具体的表达\n\n"
+                    f"💡 示例: 「看看最近的BUG」「创建一个高优先级BUG xxx」"
+                )
+                event.stop_event()
+                return
+
+            logger.info(f"[Codecks NLU] 解析意图: {intent.get('action')} - {intent.get('summary', '')}")
+
+            # 获取用户 ID（用于写操作）
+            user_id = None
+            uid, _ = await self._get_user_id()
+            if uid:
+                user_id = uid
+
+            # 执行意图
+            result = await self._nlu_handler.execute(intent, user_id)
+            yield event.plain_result(result)
+
+        except Exception as e:
+            logger.error(f"[Codecks NLU] 处理异常: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 处理指令时出错: {e}")
+
+        event.stop_event()
 
     # ==================== 命令组 ====================
 
