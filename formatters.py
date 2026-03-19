@@ -127,31 +127,26 @@ def format_card_detail(card: dict) -> str:
 
 
 def format_card_list(cards: list, title: str = "卡片列表") -> str:
-    """格式化卡片列表"""
+    """格式化卡片列表（QQ 聊天友好格式）"""
     if not cards:
         return f"📭 {title}: 没有找到卡片"
 
-    lines = [f"🃏 {title} ({len(cards)} 张)"]
-    lines.append("━━━━━━━━━━━━━━━━")
+    status_icon = {
+        "not_started": "⬚",
+        "started": "🔨",
+        "done": "✅",
+    }
 
-    for card in cards:
+    lines = [f"🃏 {title} ({len(cards)} 张)\n"]
+
+    for i, card in enumerate(cards, 1):
         card_title = _get_display_name(card)
-        status = _status(card.get("status"))
-        card_id = _get_id(card)
+        st = card.get("status", "")
+        icon = status_icon.get(st, "·")
         seq = card.get("accountSeq", "")
-        seq_str = f"#{seq} " if seq else ""
+        seq_str = f"#{seq}" if seq else ""
 
-        effort = card.get("effort")
-        effort_str = f" 💪{effort}" if effort else ""
-
-        due = card.get("dueDate")
-        due_str = f" 📅{_format_date(due)}" if due else ""
-
-        lines.append(
-            f"  {seq_str}{_truncate(card_title, 40)} "
-            f"[{status}]{effort_str}{due_str}\n"
-            f"    ID: {card_id}"
-        )
+        lines.append(f"{icon} {seq_str} {_truncate(card_title, 38)}")
 
     return "\n".join(lines)
 

@@ -24,6 +24,7 @@ class CodecksConnectorPlugin(Star):
         self._auto_user_id: Optional[str] = None
         self._nlu_handler: Optional[NLUHandler] = None
         self._nlu_skill: str = ""
+        self._default_decks: str = self.config.get("default_decks", "")
         self._load_nlu_skill()
 
     def _load_nlu_skill(self):
@@ -94,68 +95,68 @@ class CodecksConnectorPlugin(Star):
             await self.client.close()
             logger.info("[Codecks] 客户端已关闭")
 
-    # ==================== #ck 自然语言入口 ====================
+    # ==================== 命令组 ====================
 
-    @filter.on_decorating_result()
-    async def on_all_messages(self, event: AstrMessageEvent):
-        """拦截 #ck 开头的消息，进入自然语言处理流程"""
-        msg = event.message_str.strip()
-        if not msg.startswith("#ck"):
-            return  # 不是 #ck 前缀，不处理
+    @filter.command_group("codecks", alias={"ck"})
+    def codecks(self):
+        """Codecks 项目管理命令组"""
+        pass
 
-        # 提取 #ck 后面的自然语言部分
-        text = msg[3:].strip()
+    # ==================== 帮助 & 系统 ====================
 
+    @codecks.command("ai", alias={"智能", "问"})
+    async def cmd_ai(self, event: AstrMessageEvent, text: str = ""):
+        """自然语言命令入口。用法: /ck ai <自然语言指令>"""
         if not self.config.get("enable_nlu", True):
             yield event.plain_result("❌ 自然语言命令未启用")
-            event.stop_event()
             return
 
-        if not text:
+        if not text.strip():
             yield event.plain_result(
                 "🎴 Codecks 自然语言助手\n\n"
-                "用法: #ck <你的指令>\n\n"
+                "用法: /ck ai <你的指令>\n\n"
                 "示例:\n"
-                "  #ck 看看最近的BUG\n"
-                "  #ck 创建一个高优先级BUG 战斗闪退\n"
-                "  #ck 搜一下存档相关的问题\n"
-                "  #ck 我手上还有什么任务\n"
-                "  #ck 统计一下进度"
+                "  /ck ai 看看最近的BUG\n"
+                "  /ck ai 创建一个高优先级BUG 战斗闪退\n"
+                "  /ck ai 搜一下存档相关的问题\n"
+                "  /ck ai 我手上还有什么任务\n"
+                "  /ck ai 统计一下进度"
             )
-            event.stop_event()
             return
 
         # 前置检查
         ok, err, _ = await self._pre_check()
         if not ok:
             yield event.plain_result(err)
-            event.stop_event()
             return
 
-        # 确保 NLU Handler 已初始化
+        # 确保 NLU Handler 已初始化（传入 provider 用于智能搜索筛选）
+        provider = self.context.get_using_provider()
         if self._nlu_handler is None:
-            self._nlu_handler = NLUHandler(self.client)
+            self._nlu_handler = NLUHandler(
+                self.client,
+                llm_provider=provider,
+                default_deck_names=self._default_decks
+            )
+        else:
+            self._nlu_handler.llm_provider = provider
 
         if not self._nlu_skill:
             yield event.plain_result("❌ NLU Skill 文档未加载，无法解析自然语言")
-            event.stop_event()
             return
 
         # 调用 LLM 解析意图
-        provider = self.context.get_using_provider()
         if not provider:
             yield event.plain_result("❌ 未配置 LLM Provider，无法使用自然语言命令")
-            event.stop_event()
             return
 
         try:
             resp = await provider.text_chat(
-                prompt=text,
+                prompt=text.strip(),
                 system_prompt=self._nlu_skill
             )
             if not resp or not resp.completion_text:
                 yield event.plain_result("❌ LLM 未返回有效响应")
-                event.stop_event()
                 return
 
             # 解析意图
@@ -166,7 +167,6 @@ class CodecksConnectorPlugin(Star):
                     f"🤔 无法理解你的意图，请试试更具体的表达\n\n"
                     f"💡 示例: 「看看最近的BUG」「创建一个高优先级BUG xxx」"
                 )
-                event.stop_event()
                 return
 
             logger.info(f"[Codecks NLU] 解析意图: {intent.get('action')} - {intent.get('summary', '')}")
@@ -184,17 +184,6 @@ class CodecksConnectorPlugin(Star):
         except Exception as e:
             logger.error(f"[Codecks NLU] 处理异常: {e}", exc_info=True)
             yield event.plain_result(f"❌ 处理指令时出错: {e}")
-
-        event.stop_event()
-
-    # ==================== 命令组 ====================
-
-    @filter.command_group("codecks", alias={"ck"})
-    def codecks(self):
-        """Codecks 项目管理命令组"""
-        pass
-
-    # ==================== 帮助 & 系统 ====================
 
     @codecks.command("help", alias={"帮助"})
     async def cmd_help(self, event: AstrMessageEvent):

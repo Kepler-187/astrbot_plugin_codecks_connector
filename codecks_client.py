@@ -120,6 +120,13 @@ class ResponseParser:
         resolved = dict(item)
 
         for key, value in list(resolved.items()):
+            # 清洗带查询参数的 key: "cards({...})" → "cards"
+            base_key = key.split("(")[0] if "(" in key else key
+            if base_key != key:
+                resolved[base_key] = value
+                del resolved[key]
+                key = base_key
+
             if isinstance(value, list) and len(value) > 0:
                 if isinstance(value[0], str):
                     entity_data = self._find_entity_data(key, raw_result)
@@ -371,6 +378,7 @@ class CodecksClient:
         milestone_id: str = None,
         assignee_id: str = None,
         status: str = None,
+        priority: str = None,
         search: str = None,
         limit: int = 50,
         order: str = "-createdAt"
@@ -384,6 +392,7 @@ class CodecksClient:
             milestone_id: 里程碑 ID
             assignee_id: 负责人 ID
             status: 状态（"created" / "started" / "done"）
+            priority: 优先级（"a"=最高, "b"=高, "c"=普通, "d"=低）
             search: 搜索关键词（全文搜索 content）
             limit: 返回数量限制（最大 3000）
             order: 排序字段（"-" 前缀表示降序）
@@ -399,6 +408,8 @@ class CodecksClient:
             filters["assigneeId"] = assignee_id
         if status:
             filters["status"] = status
+        if priority:
+            filters["priority"] = priority
         if search:
             filters["content"] = {"op": "search", "value": search}
 

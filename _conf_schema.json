@@ -28,5 +28,11 @@
     "type": "string",
     "default": "",
     "hint": "覆盖默认的 NLU Skill 文档内容。留空则使用插件自带的 codecks_nlu_skill.md。"
+  },
+  "default_decks": {
+    "description": "默认查询的 Deck 名称",
+    "type": "string",
+    "default": "",
+    "hint": "限定 AI 搜索/筛选只查这些 Deck。多个用逗号分隔，如 Stable Bugs,Feature Requests。留空则查所有 Deck。名称需精确匹配，可通过 /ck decks 查看。"
   }
 }

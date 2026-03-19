@@ -36,6 +36,7 @@ git clone https://github.com/AstrBotDevs/astrbot_plugin_codecks_connector.git
 | **Token** | Codecks API 认证令牌 | ✅ |
 | **子域名** | 组织子域名（如 `team123.codecks.io` → `team123`） | ✅ |
 | 请求间隔 | API 请求最小间隔（秒），默认 0.15 | ❌ |
+| 默认 Deck | 限定查询范围的 Deck 名称，多个用逗号分隔 | ❌ |
 
 ### 获取 Token
 
@@ -46,9 +47,29 @@ git clone https://github.com/AstrBotDevs/astrbot_plugin_codecks_connector.git
 
 > ⚠️ **注意**：Token 等同于你的用户身份，拥有你账号的全部权限。请妥善保管，不要泄露。
 
+### 默认 Deck 配置
+
+设置 `default_decks` 后，AI 查询（`/ck ai`）只会在指定的 Deck 中搜索和筛选卡片。
+
+- 名称需与 Codecks 中的 Deck 名称完全一致
+- 多个 Deck 用半角逗号分隔：`Stable Bugs,疑难杂症`
+- 留空则查询所有 Deck
+- 已归档的卡片会自动被排除
+
 ## 📖 命令一览
 
 所有命令使用 `/codecks` 或 `/ck` 前缀。
+
+### AI 智能查询
+
+| 命令 | 说明 |
+|---|---|
+| `/ck ai <自然语言>` | 用自然语言查询/筛选卡片 |
+
+示例：
+- `/ck ai 今天完成了哪些BUG`
+- `/ck ai 搜索联机相关的问题`
+- `/ck ai 最近3天的高优先级卡片`
 
 ### 查询命令
 
@@ -108,7 +129,9 @@ git clone https://github.com/AstrBotDevs/astrbot_plugin_codecks_connector.git
 astrbot_plugin_codecks_connector/
 ├── main.py               # 插件入口，命令注册
 ├── codecks_client.py     # Codecks API 客户端
+├── nlu_handler.py        # AI 自然语言理解处理
 ├── formatters.py         # 输出格式化
+├── codecks_nlu_skill.md  # NLU Skill 配置
 ├── metadata.yaml         # 插件元数据
 ├── _conf_schema.json     # 配置 Schema
 ├── requirements.txt      # Python 依赖
