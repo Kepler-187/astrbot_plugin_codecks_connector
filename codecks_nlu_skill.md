@@ -32,8 +32,8 @@
 | `list_decks` | 列出卡组 | `project_id`(可选) |
 | `list_cards` | 列出卡片 | `deck_id`(可选), `limit`(可选,默认10) |
 | `get_card` | 查看卡片详情 | `card_id`(必填) |
-| `search_cards` | 按关键词搜索 | `keywords`(必填, 2-3个最短核心词的数组), `original_query`(必填, 用户原始描述) |
-| `filter_cards` | 按条件筛选 | `status`(可选: not_started/started/done), `priority`(可选: a/b/c/d), `days`(可选,最近N天), `assignee_id`(可选), `limit`(可选,默认20) |
+| `search_cards` | 按关键词搜索 | `keywords`(必填, 2-3个最短核心词的数组), `original_query`(必填, 用户原始描述), `include_archived`(可选,布尔,是否包含归档卡片) |
+| `filter_cards` | 按条件筛选 | `status`(可选: not_started/started/done), `priority`(可选: a/b/c/d), `days`(可选,最近N天), `date_from`(可选,ISO日期如"2026-03-10T00:00:00+08:00"), `date_to`(可选,ISO日期), `include_archived`(可选,布尔,是否包含归档卡片), `assignee_id`(可选), `limit`(可选,默认20) |
 | `list_milestones` | 列出里程碑 | 无 |
 | `list_tags` | 列出标签 | `project_id`(可选) |
 | `list_sprints` | 列出冲刺 | `project_id`(可选) |
@@ -145,6 +145,24 @@
   "action": "filter_cards",
   "params": {"status": "done", "limit": 20},
   "summary": "筛选所有已完成的卡片"
+}
+```
+
+**用户**: 把从3月10号到3月20号中午12点之间修复完成的BUG列一下，包括归档的
+```json
+{
+  "action": "filter_cards",
+  "params": {"status": "done", "date_from": "2026-03-10T00:00:00+08:00", "date_to": "2026-03-20T12:00:00+08:00", "include_archived": true, "limit": 50},
+  "summary": "筛选3月10日至3月20日中午已完成的卡片（含归档）"
+}
+```
+
+**用户**: 最近归档了哪些BUG
+```json
+{
+  "action": "filter_cards",
+  "params": {"include_archived": true, "days": 7, "limit": 30},
+  "summary": "筛选最近7天的卡片（含归档）"
 }
 ```
 

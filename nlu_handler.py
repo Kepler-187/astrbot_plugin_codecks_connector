@@ -47,13 +47,15 @@ class NLUHandler:
         except Exception:
             return []
 
-    async def _get_cards_from_decks(self, limit: int = 500, **kwargs) -> list:
-        """从配置的 deck 中获取卡片，支持多 deck 合并，自动排除归档卡"""
+    async def _get_cards_from_decks(self, limit: int = 500, include_archived: bool = False, **kwargs) -> list:
+        """从配置的 deck 中获取卡片，支持多 deck 合并，默认排除归档卡"""
         deck_ids = await self._resolve_deck_ids()
         if not deck_ids:
             # 未配置 deck，查所有
             cards = await self.client.get_cards(limit=limit, **kwargs)
-            return [c for c in cards if not str(c.get("derivedStatus", "")).startswith("archived")]
+            if not include_archived:
+                cards = [c for c in cards if not str(c.get("derivedStatus", "")).startswith("archived")]
+            return cards
 
         # 多 deck 合并（用 accountSeq 去重）
         seen_seqs = set()
@@ -64,8 +66,8 @@ class NLUHandler:
             except Exception:
                 cards = []
             for c in cards:
-                # 跳过归档卡片
-                if str(c.get("derivedStatus", "")).startswith("archived"):
+                # 跳过归档卡片（除非 include_archived）
+                if not include_archived and str(c.get("derivedStatus", "")).startswith("archived"):
                     continue
                 seq = c.get("accountSeq")
                 if seq is not None:
@@ -170,6 +172,7 @@ class NLUHandler:
         2. 用 LLM 从标题中筛选出与用户描述相关的卡片
         3. 无 LLM 时降级为多关键词 API 搜索
         """
+        include_archived = params.get("include_archived", False)
         keywords = params.get("keywords", [])
         original_query = params.get("original_query", "")
 
@@ -183,7 +186,7 @@ class NLUHandler:
 
         # === 方案 A：LLM 全量筛选（优先） ===
         if self.llm_provider and original_query:
-            result = await self._llm_full_search(original_query)
+            result = await self._llm_full_search(original_query, include_archived=include_archived)
             if result is not None:
                 if not result:
                     return f"📭 搜索「{search_desc}」：没有找到相关卡片"
@@ -214,7 +217,7 @@ class NLUHandler:
             title=f"搜索「{'、'.join(keywords)}」结果"
         )
 
-    async def _llm_full_search(self, query: str) -> Optional[list]:
+    async def _llm_full_search(self, query: str, include_archived: bool = False) -> Optional[list]:
         """
         获取全量卡片标题，用 LLM 筛选出相关卡片。
         返回 None 表示 LLM 调用失败（应降级到关键词搜索）。
@@ -225,7 +228,7 @@ class NLUHandler:
 
         try:
             # 获取大量卡片
-            all_cards = await self._get_cards_from_decks(limit=500)
+            all_cards = await self._get_cards_from_decks(limit=500, include_archived=include_archived)
             if not all_cards:
                 return []
 
@@ -357,9 +360,12 @@ class NLUHandler:
             priority = params.get("priority")
             assignee_id = params.get("assignee_id")
             days = params.get("days")
+            date_from = params.get("date_from")
+            date_to = params.get("date_to")
+            include_archived = params.get("include_archived", False)
 
             # 全部在代码层过滤，避免 API 500 错误
-            cards = await self._get_cards_from_decks(limit=500)
+            cards = await self._get_cards_from_decks(limit=500, include_archived=include_archived)
 
             # 按条件筛选
             if status:
@@ -369,9 +375,36 @@ class NLUHandler:
             if assignee_id:
                 cards = [c for c in cards if c.get("assigneeId") == assignee_id]
 
-            # 按时间范围筛选（严格最近 N×24小时，与 Codecks 一致）
-            if days:
-                from datetime import datetime, timedelta, timezone
+            from datetime import datetime, timedelta, timezone
+
+            # 按绝对日期范围筛选（date_from / date_to，ISO 格式）
+            if date_from or date_to:
+                try:
+                    dt_from = datetime.fromisoformat(date_from.replace("Z", "+00:00")) if date_from else None
+                    dt_to = datetime.fromisoformat(date_to.replace("Z", "+00:00")) if date_to else None
+                    # 如果日期没带时区信息，视为 UTC
+                    if dt_from and dt_from.tzinfo is None:
+                        dt_from = dt_from.replace(tzinfo=timezone.utc)
+                    if dt_to and dt_to.tzinfo is None:
+                        dt_to = dt_to.replace(tzinfo=timezone.utc)
+                    filtered = []
+                    for c in cards:
+                        date_str = c.get("lastUpdatedAt") or c.get("createdAt") or ""
+                        if date_str:
+                            try:
+                                card_date = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                                if dt_from and card_date < dt_from:
+                                    continue
+                                if dt_to and card_date > dt_to:
+                                    continue
+                                filtered.append(c)
+                            except (ValueError, TypeError):
+                                pass
+                    cards = filtered
+                except (ValueError, TypeError):
+                    pass
+            # 按相对时间范围筛选（严格最近 N×24小时，与 Codecks 一致）
+            elif days:
                 try:
                     days_int = int(days)
                     cutoff_utc = datetime.now(timezone.utc) - timedelta(hours=days_int * 24)
@@ -398,12 +431,20 @@ class NLUHandler:
             desc_parts = []
             priority_names = {"a": "最高", "b": "高", "c": "普通", "d": "低"}
             status_names = {"not_started": "未完成", "created": "未完成", "started": "进行中", "done": "已完成"}
-            if days:
+            if date_from and date_to:
+                desc_parts.append(f"{date_from}~{date_to}")
+            elif date_from:
+                desc_parts.append(f"{date_from}起")
+            elif date_to:
+                desc_parts.append(f"截至{date_to}")
+            elif days:
                 desc_parts.append(f"最近{days}天")
             if priority:
                 desc_parts.append(f"{priority_names.get(priority, priority)}优先级")
             if status:
                 desc_parts.append(status_names.get(status, status))
+            if include_archived:
+                desc_parts.append("含归档")
             title = "、".join(desc_parts) + "卡片" if desc_parts else "筛选结果"
             return formatters.format_card_list(cards, title=title)
 
