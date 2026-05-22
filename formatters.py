@@ -341,6 +341,36 @@ def format_stats(stats: dict) -> str:
     return "\n".join(lines)
 
 
+# ==================== 日报格式化 ====================
+
+def format_daily_report(new_cards: list, resolved_cards: list, date_str: str = "") -> str:
+    """格式化日报（今日新记录 + 今日解决）"""
+    lines = [f"📊 今日日报" + (f" ({date_str})" if date_str else "")]
+    lines.append("━━━━━━━━━━━━━━━━")
+
+    lines.append(f"\n🆕 今天新记录的卡片 ({len(new_cards)} 张):")
+    if new_cards:
+        for card in new_cards:
+            title = _get_display_name(card)
+            seq = card.get("accountSeq", "")
+            seq_str = f"#{seq} " if seq else ""
+            lines.append(f"  📋 {seq_str}{_truncate(title, 40)}")
+    else:
+        lines.append("  (无)")
+
+    lines.append(f"\n✅ 今天解决的卡片 ({len(resolved_cards)} 张):")
+    if resolved_cards:
+        for card in resolved_cards:
+            title = _get_display_name(card)
+            seq = card.get("accountSeq", "")
+            seq_str = f"#{seq} " if seq else ""
+            lines.append(f"  ✅ {seq_str}{_truncate(title, 40)}")
+    else:
+        lines.append("  (无)")
+
+    return "\n".join(lines)
+
+
 # ==================== 帮助信息 ====================
 
 def format_help() -> str:
@@ -360,6 +390,7 @@ def format_help() -> str:
   /ck me                 — 当前用户信息
   /ck hand (手牌/我的任务)  — 我的待办
   /ck stats (统计) [项目ID] — 卡片统计
+  /ck daily (日报)        — 今日新增 & 已解决卡片
 
 ✏️ 操作命令:
   /ck newcard (新建卡片) <标题> [卡组ID] [工作量] [优先级]

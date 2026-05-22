@@ -573,6 +573,61 @@ class CodecksConnectorPlugin(Star):
         except CodecksError as e:
             yield event.plain_result(f"❌ 获取统计失败: {e}")
 
+    # ==================== 日报 ====================
+
+    @codecks.command("daily", alias={"日报"})
+    async def cmd_daily(self, event: AstrMessageEvent):
+        """查看今日日报：新记录的卡片和已解决的卡片"""
+        ok, err, _ = await self._pre_check()
+        if not ok:
+            yield event.plain_result(err)
+            return
+
+        try:
+            from datetime import datetime, timezone
+
+            today = datetime.now(timezone.utc).date()
+            today_str = today.isoformat()
+
+            cards = await self.client.get_cards(limit=500)
+
+            new_cards = []
+            resolved_cards = []
+
+            for card in cards:
+                created_str = card.get("createdAt", "")
+                if created_str:
+                    try:
+                        created_date = datetime.fromisoformat(
+                            created_str.replace("Z", "+00:00")
+                        ).date()
+                        if created_date == today:
+                            new_cards.append(card)
+                    except (ValueError, TypeError):
+                        pass
+
+                if card.get("status") == "done":
+                    updated_str = card.get("lastUpdatedAt", "")
+                    if updated_str:
+                        try:
+                            updated_date = datetime.fromisoformat(
+                                updated_str.replace("Z", "+00:00")
+                            ).date()
+                            if updated_date == today:
+                                resolved_cards.append(card)
+                        except (ValueError, TypeError):
+                            pass
+
+            # 按创建时间降序排列
+            new_cards.sort(key=lambda c: c.get("createdAt", ""), reverse=True)
+            resolved_cards.sort(key=lambda c: c.get("lastUpdatedAt", ""), reverse=True)
+
+            yield event.plain_result(
+                formatters.format_daily_report(new_cards, resolved_cards, today_str)
+            )
+        except CodecksError as e:
+            yield event.plain_result(f"❌ 获取日报失败: {e}")
+
     # ==================== 定时任务 ====================
 
     async def _execute_scheduled_query(self, ai_prompt: str):
