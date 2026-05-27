@@ -52,5 +52,11 @@
     "type": "list",
     "default": [],
     "hint": "填写要接收定时推送的群。格式: 平台ID:群号，例如 aiocqhttp:123456789。多个群各填一行。可通过 /ck schedule test <编号> 测试。"
+  },
+  "card_create_notify_targets": {
+    "description": "建卡成功通知目标群列表",
+    "type": "list",
+    "default": [],
+    "hint": "创建 Codecks 卡片成功后，向这些群发送通知。支持填写 纯群号 或 平台ID:群号，例如 249325567 或 aiocqhttp:249325567。多个群各填一行。"
   }
 }

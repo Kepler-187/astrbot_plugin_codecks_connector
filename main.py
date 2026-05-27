@@ -78,6 +78,96 @@ class CodecksConnectorPlugin(Star):
                 excluded.add(normalized)
         return excluded
 
+    def _get_card_create_notify_targets(self) -> list[str]:
+        """Return configured notification targets for successful card creation."""
+        targets = self.config.get("card_create_notify_targets", [])
+        if not isinstance(targets, list):
+            return []
+        return [str(target).strip() for target in targets if str(target).strip()]
+
+    def _get_default_platform_name(self) -> Optional[str]:
+        """Resolve a preferred platform name for plain numeric group targets."""
+        try:
+            platforms = self.context.get_registered_platforms()
+        except Exception:
+            return None
+
+        preferred = None
+        fallback = None
+        for platform in platforms or []:
+            name = platform.meta.name if hasattr(platform, "meta") else None
+            if not name:
+                continue
+            if fallback is None:
+                fallback = name
+            lowered = name.lower()
+            if "qq" in lowered or "cqhttp" in lowered or "aiocqhttp" in lowered:
+                preferred = name
+                break
+        return preferred or fallback
+
+    def _build_group_umo(self, target: str) -> Optional[str]:
+        """Convert a configured group target to AstrBot UMO format."""
+        normalized = str(target).strip()
+        if not normalized:
+            return None
+
+        if ":" not in normalized:
+            if not normalized.isdigit():
+                logger.warning(f"[Codecks] 无效的建卡通知目标格式: {normalized}")
+                return None
+            platform_name = self._get_default_platform_name()
+            if not platform_name:
+                logger.warning(
+                    f"[Codecks] 建卡通知目标 {normalized} 未指定平台，且无法自动确定平台名"
+                )
+                return None
+            normalized = f"{platform_name}:{normalized}"
+
+        platform_id, group_id = normalized.split(":", 1)
+        if not platform_id or not group_id:
+            logger.warning(f"[Codecks] 无效的建卡通知目标格式: {normalized}")
+            return None
+        return f"{platform_id}:GroupMessage:{group_id}"
+
+    def _build_card_reference(self, card: dict) -> str:
+        """Build a card reference suitable for external notifications."""
+        subdomain = self._get_subdomain().strip()
+        friendly_id = card.get("uniqueFriendlyId")
+        account_seq = card.get("accountSeq")
+        card_id = card.get("id")
+
+        if subdomain and friendly_id:
+            return f"https://{subdomain}.codecks.io/{friendly_id}"
+        if account_seq:
+            return f"#{account_seq}"
+        return str(card_id or "未知")
+
+    async def _notify_card_created(self, card: dict, title: str) -> None:
+        """Send a post-create notification to configured groups."""
+        targets = self._get_card_create_notify_targets()
+        if not targets:
+            return
+
+        card_ref = self._build_card_reference(card)
+        card_id = card.get("id", "未知")
+        message = (
+            "Codecks 新卡片已创建\n"
+            f"标题: {title}\n"
+            f"卡片: {card_ref}\n"
+            f"ID: {card_id}"
+        )
+
+        for target in targets:
+            umo = self._build_group_umo(target)
+            if not umo:
+                continue
+            try:
+                await self.context.send_message(umo, MessageChain().message(message))
+                logger.info(f"[Codecks] 建卡通知已发送到 {umo}")
+            except Exception as e:
+                logger.error(f"[Codecks] 发送建卡通知到 {umo} 失败: {e}")
+
     def _is_daily_tag_excluded(self, card: dict, excluded_tags: set[str]) -> bool:
         """Check whether a card contains any tag excluded from /ck daily."""
         if not excluded_tags:
@@ -182,7 +272,8 @@ class CodecksConnectorPlugin(Star):
             self._nlu_handler = NLUHandler(
                 self.client,
                 llm_provider=provider,
-                default_deck_names=self._default_decks
+                default_deck_names=self._default_decks,
+                card_created_callback=self._notify_card_created
             )
         else:
             self._nlu_handler.llm_provider = provider
@@ -357,6 +448,7 @@ class CodecksConnectorPlugin(Star):
                 title=title, deck_id=did, effort=effort,
                 priority=priority, user_id=user_id
             )
+            await self._notify_card_created(result, title)
             card_id = result.get("id", "未知")
             yield event.plain_result(f"✅ 卡片已创建！\n  标题: {title}\n  ID: {card_id}")
         except CodecksError as e:

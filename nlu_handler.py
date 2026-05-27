@@ -7,7 +7,7 @@ Codecks NLU Handler
 
 import json
 import re
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from . import formatters
 from .codecks_client import CodecksClient, CodecksError
@@ -16,9 +16,16 @@ from .codecks_client import CodecksClient, CodecksError
 class NLUHandler:
     """自然语言意图处理器"""
 
-    def __init__(self, client: CodecksClient, llm_provider=None, default_deck_names: str = ""):
+    def __init__(
+        self,
+        client: CodecksClient,
+        llm_provider=None,
+        default_deck_names: str = "",
+        card_created_callback: Optional[Callable[[dict, str], Awaitable[None]]] = None
+    ):
         self.client = client
         self.llm_provider = llm_provider
+        self.card_created_callback = card_created_callback
         # 解析逗号分隔的 deck 名称列表
         self._default_deck_names = [
             n.strip() for n in default_deck_names.split(",") if n.strip()
@@ -494,6 +501,8 @@ class NLUHandler:
                 priority=params.get("priority", "c"),
                 user_id=user_id
             )
+            if self.card_created_callback:
+                await self.card_created_callback(result, title)
             card_id = result.get("id", "未知")
             priority_display = formatters._priority(params.get("priority", "c"))
             return (
