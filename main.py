@@ -703,55 +703,56 @@ class CodecksConnectorPlugin(Star):
             return
 
         try:
-            from datetime import datetime, timezone
-
-            today = datetime.now(timezone.utc).date()
-            today_str = today.isoformat()
-
-            cards = await self.client.get_cards(limit=500)
-            excluded_tags = self._get_daily_excluded_tags()
-
-            new_cards = []
-            resolved_cards = []
-
-            for card in cards:
-                if self._is_daily_tag_excluded(card, excluded_tags):
-                    continue
-
-                created_str = card.get("createdAt", "")
-                if created_str:
-                    try:
-                        created_date = datetime.fromisoformat(
-                            created_str.replace("Z", "+00:00")
-                        ).date()
-                        if created_date == today:
-                            new_cards.append(card)
-                    except (ValueError, TypeError):
-                        pass
-
-                if card.get("status") == "done":
-                    updated_str = card.get("lastUpdatedAt", "")
-                    if updated_str:
-                        try:
-                            updated_date = datetime.fromisoformat(
-                                updated_str.replace("Z", "+00:00")
-                            ).date()
-                            if updated_date == today:
-                                resolved_cards.append(card)
-                        except (ValueError, TypeError):
-                            pass
-
-            # 按创建时间降序排列
-            new_cards.sort(key=lambda c: c.get("createdAt", ""), reverse=True)
-            resolved_cards.sort(key=lambda c: c.get("lastUpdatedAt", ""), reverse=True)
-
-            yield event.plain_result(
-                formatters.format_daily_report(new_cards, resolved_cards, today_str)
-            )
+            yield event.plain_result(await self._build_daily_report_text())
         except CodecksError as e:
             yield event.plain_result(f"❌ 获取日报失败: {e}")
 
     # ==================== 定时任务 ====================
+
+    async def _build_daily_report_text(self) -> str:
+        """Build the current daily report text."""
+        from datetime import datetime, timezone
+
+        today = datetime.now(timezone.utc).date()
+        today_str = today.isoformat()
+
+        cards = await self.client.get_cards(limit=500)
+        excluded_tags = self._get_daily_excluded_tags()
+
+        new_cards = []
+        resolved_cards = []
+
+        for card in cards:
+            if self._is_daily_tag_excluded(card, excluded_tags):
+                continue
+
+            created_str = card.get("createdAt", "")
+            if created_str:
+                try:
+                    created_date = datetime.fromisoformat(
+                        created_str.replace("Z", "+00:00")
+                    ).date()
+                    if created_date == today:
+                        new_cards.append(card)
+                except (ValueError, TypeError):
+                    pass
+
+            if card.get("status") == "done":
+                updated_str = card.get("lastUpdatedAt", "")
+                if updated_str:
+                    try:
+                        updated_date = datetime.fromisoformat(
+                            updated_str.replace("Z", "+00:00")
+                        ).date()
+                        if updated_date == today:
+                            resolved_cards.append(card)
+                    except (ValueError, TypeError):
+                        pass
+
+        new_cards.sort(key=lambda c: c.get("createdAt", ""), reverse=True)
+        resolved_cards.sort(key=lambda c: c.get("lastUpdatedAt", ""), reverse=True)
+
+        return formatters.format_daily_report(new_cards, resolved_cards, today_str)
 
     async def _execute_scheduled_query(self, ai_prompt: str):
         """定时任务回调：执行 AI 查询并发送结果到配置中的目标群"""
@@ -767,48 +768,49 @@ class CodecksConnectorPlugin(Star):
             logger.error(f"[Codecks Scheduler] 前置检查失败: {err}")
             return
 
-        # 确保 NLU Handler 就绪
-        provider = self.context.get_using_provider()
-        if not provider:
-            logger.error("[Codecks Scheduler] 未配置 LLM Provider，无法执行定时查询")
-            return
-
-        if self._nlu_handler is None:
-            self._nlu_handler = NLUHandler(
-                self.client,
-                llm_provider=provider,
-                default_deck_names=self._default_decks
-            )
-        else:
-            self._nlu_handler.llm_provider = provider
-
-        if not self._nlu_skill:
-            logger.error("[Codecks Scheduler] NLU Skill 文档未加载")
-            return
-
         try:
-            # 调用 LLM 解析意图
-            resp = await provider.text_chat(
-                prompt=ai_prompt,
-                system_prompt=self._nlu_skill
-            )
-            if not resp or not resp.completion_text:
-                logger.error("[Codecks Scheduler] LLM 未返回有效响应")
-                return
+            normalized_prompt = ai_prompt.strip().lower()
+            if normalized_prompt in {"/ck 日报", "/ck daily", "日报", "daily"}:
+                result = await self._build_daily_report_text()
+            else:
+                provider = self.context.get_using_provider()
+                if not provider:
+                    logger.error("[Codecks Scheduler] 未配置 LLM Provider，无法执行定时查询")
+                    return
 
-            intent = self._nlu_handler.parse_intent(resp.completion_text)
-            if not intent:
-                logger.error(f"[Codecks Scheduler] 无法解析意图: {resp.completion_text[:200]}")
-                return
+                if self._nlu_handler is None:
+                    self._nlu_handler = NLUHandler(
+                        self.client,
+                        llm_provider=provider,
+                        default_deck_names=self._default_decks,
+                        card_created_callback=self._notify_card_created
+                    )
+                else:
+                    self._nlu_handler.llm_provider = provider
 
-            # 获取用户 ID
-            user_id = None
-            uid, _ = await self._get_user_id()
-            if uid:
-                user_id = uid
+                if not self._nlu_skill:
+                    logger.error("[Codecks Scheduler] NLU Skill 文档未加载")
+                    return
 
-            # 执行意图获取结果
-            result = await self._nlu_handler.execute(intent, user_id)
+                resp = await provider.text_chat(
+                    prompt=ai_prompt,
+                    system_prompt=self._nlu_skill
+                )
+                if not resp or not resp.completion_text:
+                    logger.error("[Codecks Scheduler] LLM 未返回有效响应")
+                    return
+
+                intent = self._nlu_handler.parse_intent(resp.completion_text)
+                if not intent:
+                    logger.error(f"[Codecks Scheduler] 无法解析意图: {resp.completion_text[:200]}")
+                    return
+
+                user_id = None
+                uid, _ = await self._get_user_id()
+                if uid:
+                    user_id = uid
+
+                result = await self._nlu_handler.execute(intent, user_id)
 
             # 添加定时任务标识
             from datetime import datetime
@@ -817,33 +819,10 @@ class CodecksConnectorPlugin(Star):
 
             # 发送到所有目标群
             for target in targets:
-                target = target.strip()
-                if not target:
+                umo = self._build_group_umo(target)
+                if not umo:
+                    logger.warning(f"[Codecks Scheduler] 无法解析目标群: {target}")
                     continue
-
-                # 纯数字群号：自动查找可用平台 ID
-                if ":" not in target:
-                    if target.isdigit():
-                        # 尝试从已注册的平台中获取第一个平台 ID
-                        auto_platform = None
-                        try:
-                            platforms = self.context.get_registered_platforms()
-                            if platforms:
-                                auto_platform = platforms[0].meta.name if hasattr(platforms[0], 'meta') else None
-                        except Exception:
-                            pass
-                        if not auto_platform:
-                            logger.warning(f"[Codecks Scheduler] 纯数字群号 {target}，但无法确定平台名。请使用 平台名:群号 格式")
-                            continue
-                        target = f"{auto_platform}:{target}"
-                    else:
-                        logger.warning(f"[Codecks Scheduler] 无效的目标群格式: {target}")
-                        continue
-
-                parts = target.split(":", 1)
-                platform_id = parts[0]
-                group_id = parts[1]
-                umo = f"{platform_id}:GroupMessage:{group_id}"
 
                 try:
                     await self.context.send_message(umo, MessageChain().message(message))
