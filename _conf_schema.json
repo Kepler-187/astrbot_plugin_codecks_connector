@@ -35,6 +35,12 @@
     "default": "",
     "hint": "限定 AI 搜索/筛选只查这些 Deck。多个用逗号分隔，如 Stable Bugs,Feature Requests。留空则查所有 Deck。名称需精确匹配，可通过 /ck decks 查看。"
   },
+  "daily_excluded_tags": {
+    "description": "日报排除标签",
+    "type": "string",
+    "default": "",
+    "hint": "配置后 /ck daily 会忽略带这些标签的卡片。多个用逗号分隔，如 #玩家报告,#外部反馈。支持带 # 或不带 #，匹配不区分大小写。"
+  },
   "enable_scheduler": {
     "description": "启用定时任务功能",
     "type": "bool",

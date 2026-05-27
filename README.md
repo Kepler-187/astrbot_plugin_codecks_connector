@@ -149,3 +149,12 @@ astrbot_plugin_codecks_connector/
 ## 📄 许可
 
 MIT License
+
+## Daily Excluded Tags
+
+`/ck daily` now supports excluding cards by tag via plugin config `daily_excluded_tags`.
+
+- Example: `#玩家报告`
+- Multiple tags: `#玩家报告,#外部反馈`
+- Supports values with or without `#`
+- Matching is case-insensitive

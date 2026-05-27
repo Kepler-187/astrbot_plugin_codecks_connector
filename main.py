@@ -26,6 +26,7 @@ class CodecksConnectorPlugin(Star):
         self._nlu_handler: Optional[NLUHandler] = None
         self._nlu_skill: str = ""
         self._default_decks: str = self.config.get("default_decks", "")
+        self._daily_excluded_tags: str = self.config.get("daily_excluded_tags", "")
         self._load_nlu_skill()
         # 初始化定时任务调度器（延迟启动，避免 event loop 未就绪）
         self._scheduler: Optional[Scheduler] = None
@@ -61,6 +62,32 @@ class CodecksConnectorPlugin(Star):
 
     def _is_configured(self) -> bool:
         return bool(self._get_token() and self._get_subdomain())
+
+    def _parse_csv_config(self, value: str) -> list[str]:
+        """Parse comma-separated config values into a normalized string list."""
+        if not value:
+            return []
+        return [item.strip() for item in value.split(",") if item.strip()]
+
+    def _get_daily_excluded_tags(self) -> set[str]:
+        """Return normalized tag names excluded from /ck daily."""
+        excluded = set()
+        for tag in self._parse_csv_config(self._daily_excluded_tags):
+            normalized = tag.lstrip("#").strip().lower()
+            if normalized:
+                excluded.add(normalized)
+        return excluded
+
+    def _is_daily_tag_excluded(self, card: dict, excluded_tags: set[str]) -> bool:
+        """Check whether a card contains any tag excluded from /ck daily."""
+        if not excluded_tags:
+            return False
+        card_tags = (card.get("masterTags") or []) + (card.get("tags") or [])
+        for tag in card_tags:
+            normalized = str(tag).lstrip("#").strip().lower()
+            if normalized in excluded_tags:
+                return True
+        return False
 
     async def _ensure_client(self) -> tuple:
         """确保客户端已初始化，返回 (成功, 错误消息)"""
@@ -590,11 +617,15 @@ class CodecksConnectorPlugin(Star):
             today_str = today.isoformat()
 
             cards = await self.client.get_cards(limit=500)
+            excluded_tags = self._get_daily_excluded_tags()
 
             new_cards = []
             resolved_cards = []
 
             for card in cards:
+                if self._is_daily_tag_excluded(card, excluded_tags):
+                    continue
+
                 created_str = card.get("createdAt", "")
                 if created_str:
                     try:
