@@ -69,6 +69,27 @@ class CodecksConnectorPlugin(Star):
             return []
         return [item.strip() for item in value.split(",") if item.strip()]
 
+    def _normalize_target_config(self, value) -> list[str]:
+        """Normalize target config from WebUI list/text inputs."""
+        if not value:
+            return []
+
+        if isinstance(value, list):
+            raw_items = [str(item) for item in value if str(item).strip()]
+        elif isinstance(value, str):
+            raw_items = [value]
+        else:
+            raw_items = [str(value)]
+
+        normalized: list[str] = []
+        for item in raw_items:
+            for line in item.replace("\r", "\n").split("\n"):
+                for part in line.split(","):
+                    target = part.strip()
+                    if target:
+                        normalized.append(target)
+        return normalized
+
     def _get_daily_excluded_tags(self) -> set[str]:
         """Return normalized tag names excluded from /ck daily."""
         excluded = set()
@@ -80,10 +101,9 @@ class CodecksConnectorPlugin(Star):
 
     def _get_card_create_notify_targets(self) -> list[str]:
         """Return configured notification targets for successful card creation."""
-        targets = self.config.get("card_create_notify_targets", [])
-        if not isinstance(targets, list):
-            return []
-        return [str(target).strip() for target in targets if str(target).strip()]
+        return self._normalize_target_config(
+            self.config.get("card_create_notify_targets", [])
+        )
 
     def _get_default_platform_name(self) -> Optional[str]:
         """Resolve a preferred platform name for plain numeric group targets."""
@@ -757,7 +777,9 @@ class CodecksConnectorPlugin(Star):
     async def _execute_scheduled_query(self, ai_prompt: str):
         """定时任务回调：执行 AI 查询并发送结果到配置中的目标群"""
         self._ensure_scheduler_started()
-        targets = self.config.get("schedule_targets", [])
+        targets = self._normalize_target_config(
+            self.config.get("schedule_targets", [])
+        )
         if not targets:
             logger.warning("[Codecks Scheduler] 未配置推送目标群 (schedule_targets)，跳过执行")
             return
